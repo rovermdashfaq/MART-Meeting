@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mart Meeting — Create Room</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="center">
+    <h1>Mart Meeting</h1>
+    <p>Free video & audio calls — hosted on GitHub Pages + Firebase (Realtime DB)</p>
+    <div class="controls">
+      <button id="createRoomBtn">Create New Room</button>
+      <input id="joinRoomId" placeholder="Or paste room id (abc123)" />
+      <button id="joinRoomBtn">Join Room</button>
+    </div>
+    <small class="note">Rooms are simple short IDs. Share the room link with the person you want to call.</small>
+    <footer>Made with ❤️ — Mart Meeting</footer>
+  </main>
+
+  <script>
+    const createBtn = document.getElementById('createRoomBtn');
+    const joinBtn = document.getElementById('joinRoomBtn');
+    const joinInput = document.getElementById('joinRoomId');
+
+    function newRoomId() {
+      return Math.random().toString(36).substring(2, 9); // 7 chars
+    }
+
+    createBtn.addEventListener('click', () => {
+      const id = newRoomId();
+      window.location.href = `room.html?room=${id}`;
+    });
+
+    joinBtn.addEventListener('click', () => {
+      const id = (joinInput.value || '').trim();
+      if (!id) return alert('Enter a room id to join.');
+      window.location.href = `room.html?room=${encodeURIComponent(id)}`;
+    });
+
+    // If user opened index.html with ?room=... redirect to room directly
+    const urlRoom = new URLSearchParams(location.search).get('room');
+    if (urlRoom) window.location.href = `room.html?room=${urlRoom}`;
+  </script>
+</body>
+</html>
