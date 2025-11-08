@@ -1,47 +1,50 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Mart Meeting — Create Room</title>
+  <title>ProMeet — Create Room</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <main class="center">
-    <h1>Mart Meeting</h1>
-    <p>Free video & audio calls — hosted on GitHub Pages + Firebase (Realtime DB)</p>
+    <h1>ProMeet</h1>
+    <p class="tagline">Simple, free 1-on-1 video meetings using PeerJS • Host on GitHub Pages</p>
+
     <div class="controls">
-      <button id="createRoomBtn">Create New Room</button>
-      <input id="joinRoomId" placeholder="Or paste room id (abc123)" />
-      <button id="joinRoomBtn">Join Room</button>
+      <button id="createRoomBtn" class="primary">Create Meeting</button>
+      <div class="or">or</div>
+      <input id="joinRoomInput" placeholder="Paste room id (abc123)" />
+      <button id="joinRoomBtn" class="secondary">Join</button>
     </div>
-    <small class="note">Rooms are simple short IDs. Share the room link with the person you want to call.</small>
-    <footer>Made with ❤️ — Mart Meeting</footer>
+
+    <div class="help small">When you create a meeting you'll become the host. Share the room link with one person.</div>
+    <footer class="small">Built with ❤️ • PeerJS • Host on GitHub Pages</footer>
   </main>
 
   <script>
-    const createBtn = document.getElementById('createRoomBtn');
-    const joinBtn = document.getElementById('joinRoomBtn');
-    const joinInput = document.getElementById('joinRoomId');
-
     function newRoomId() {
-      return Math.random().toString(36).substring(2, 9); // 7 chars
+      return Math.random().toString(36).substring(2, 9);
     }
 
-    createBtn.addEventListener('click', () => {
+    document.getElementById('createRoomBtn').onclick = () => {
       const id = newRoomId();
-      window.location.href = `room.html?room=${id}`;
-    });
+      window.location.href = `room.html?room=${id}&role=host`;
+    };
 
-    joinBtn.addEventListener('click', () => {
-      const id = (joinInput.value || '').trim();
+    document.getElementById('joinRoomBtn').onclick = () => {
+      const id = (document.getElementById('joinRoomInput').value || '').trim();
       if (!id) return alert('Enter a room id to join.');
-      window.location.href = `room.html?room=${encodeURIComponent(id)}`;
-    });
+      window.location.href = `room.html?room=${encodeURIComponent(id)}&role=guest`;
+    }
 
-    // If user opened index.html with ?room=... redirect to room directly
-    const urlRoom = new URLSearchParams(location.search).get('room');
-    if (urlRoom) window.location.href = `room.html?room=${urlRoom}`;
+    // If user opens index with ?room=xxx quick-redirect
+    const q = new URLSearchParams(location.search);
+    if (q.get('room')) {
+      const room = q.get('room');
+      const role = q.get('role') || 'guest';
+      window.location.href = `room.html?room=${room}&role=${role}`;
+    }
   </script>
 </body>
 </html>
