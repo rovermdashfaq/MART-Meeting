@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Mart Meeting — Room</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+  <main class="center">
+    <header style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <h1>Mart Meeting</h1>
+      <div class="small">Simple one-on-one rooms — share the link</div>
+    </header>
+
+    <section id="topCard" class="room-wrap">
+      <div class="left">
+        <div class="video-grid">
+          <div style="flex:1">
+            <div class="small">You</div>
+            <video id="localVideo" autoplay muted playsinline></video>
+          </div>
+          <div style="flex:1">
+            <div class="small">Peer</div>
+            <video id="remoteVideo" autoplay playsinline></video>
+          </div>
+        </div>
+
+        <div class="controls-row">
+          <button id="toggleAudio" class="icon-btn">Mute</button>
+          <button id="toggleVideo" class="icon-btn">Stop Camera</button>
+          <button id="shareScreen" class="icon-btn">Share Screen</button>
+          <button id="copyLink" class="icon-btn">Copy Link</button>
+          <button id="leaveBtn" class="icon-btn leave">Leave</button>
+        </div>
+
+        <div id="status" class="small" style="margin-top:10px">Status: <span id="statusText">Initializing...</span></div>
+      </div>
+
+      <aside class="right">
+        <div class="small participants">Room: <span id="roomIdOut" class="room-id"></span><br>
+        Participants: <span id="participantCount">1</span></div>
+
+        <div class="chat">
+          <div class="chat-messages" id="chatMessages"></div>
+          <div class="chat-input">
+            <input id="msgInput" placeholder="Type a message..." />
+            <button id="sendMsg" class="icon-btn">Send</button>
+          </div>
+        </div>
+
+        <div style="margin-top:10px;">
+          <button id="toggleLogs" class="icon-btn">Show Logs</button>
+        </div>
+
+        <pre id="logs" class="hidden" style="margin-top:8px; max-height:200px; overflow:auto; background:rgba(255,255,255,0.02); padding:8px; border-radius:6px; font-size:12px"></pre>
+      </aside>
+    </section>
+  </main>
+
+  <!-- Firebase CDN (compat) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.3/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.3/firebase-database-compat.js"></script>
+
+  <script>
+  /* ==========================
+     Replace with your firebaseConfig.
+     I inserted the keys you gave in the chat, but you must add databaseURL
+     Example databaseURL: "https://mart-meeting-default-rtdb.firebaseio.com"
+  ========================== */
+  const firebaseConfig = {
+    apiKey: "AIzaSyCDMDb5Mluq1MV5ovVg9ByC2PjZt2YA5Hc",
+    authDomain: "mart-meeting.firebaseapp.com",
+    databaseURL: "https://mart-meeting-default-rtdb.firebaseio.com", // <-- Confirm in Firebase Console
+    projectId: "mart-meeting",
+    storageBucket: "mart-meeting.firebasestorage.app",
+    messagingSenderId: "972172392499",
+    appId: "1:972172392499:web:976d04d5dfa049c49c4b46"
+  };
+
+  // Initialize Firebase
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  // UI elements
+  const localVideo = document.getElementById('localVideo');
+  const remoteVideo = document.getElementById('remoteVideo');
+  const statusText = document.getElementById('statusText');
+  const roomIdOut = document.getElementById('roomIdOut');
+  const participantCountEl = document.getElementById('participantCount');
+  const copyLinkBtn = document.getElementById('copyLink');
+  const toggleAudioBtn = document.getElementById('toggleAudio');
+  const toggleVideoBtn = document.getElementById('toggleVideo');
+  const shareScreenBtn = document.getElementById('shareScreen');
+  const leaveBtn = document.getElementById('leaveBtn');
+  const chatMessages = document.getElementById('chatMessages');
+  const msgInput = document.getElementById('msgInput');
+  const sendMsgBtn = document.getElementById('sendMsg');
+  const logsPre = document.getElementById('logs');
+  const toggleLogsBtn = document.getElementById('toggleLogs');
+
+  let localStream = null;
+  let pc = null;
+  let isCaller = false;
+  let roomId = new URLSearchParams(location.search).get('room');
+  if (!roomId) {
+    alert('No room id found. Go to index and create one.');
+    location.href = 'index.html';
+  }
+  roomIdOut.textContent = roomId;
+
+  const roomRef = db.ref('rooms/' + roomId);
+  const participantsRef = db.ref('rooms/' + roomId + '/participants');
+  const chatRef = db.ref('rooms/' + roomId + '/chat');
+  const callerCandidatesRef = db.ref('rooms/' + roomId + '/callerCandidates');
+  const calleeCandidatesRef = db.ref('rooms/' + roomId + '/calleeCandidates');
+
+  const clientId = Math.random().toString(36).substring(2, 9); // small id to identify participant
+
+  // Logging helper
+  function log(...args) {
+    console.log(...args);
+    const s = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+    logsPre.textContent += s + '\n';
+    logsPre.scrollTop = logsPre.scrollHeight;
+  }
+
+  toggleLogsBtn.onclick = () => {
+    logsPre.classList.toggle('hidden');
+  };
+
+  // update status UI
+  function setStatus(t) { statusText.textContent = t; log('[status]', t); }
+
+  // setup media
+  async function startLocalStream() {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+      setStatus('Local media ready');
+    } catch (e) {
+      setStatus('Could not get local media: ' + e.message);
+      throw e;
+    }
+  }
+
+  // create RTCPeerConnection
+  function createPeerConnection() {
+    const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    pc = new RTCPeerConnection(servers);
+
+    // add local tracks
+    if (localStream) localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+
+    // remote stream
+    pc.ontrack = e => {
+      log('ontrack', e);
+      remoteVideo.srcObject = e.streams[0];
+      setStatus('Remote stream received');
+    };
+
+    // ICE candidates -> push to DB appropriate node
+    pc.onicecandidate = e => {
+      if (e.candidate) {
+        const c = e.candidate.toJSON();
+        if (isCaller) {
+          callerCandidatesRef.push(c);
+        } else {
+          calleeCandidatesRef.push(c);
+        }
+        log('Local ICE candidate pushed', c);
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      log('Connection state:', pc.connectionState);
+      setStatus('Connection: ' + pc.connectionState);
+    };
+
+    return pc;
+  }
+
+  // presence: add participant
+  participantsRef.child(clientId).set({ joinedAt: Date.now() });
+  participantsRef.child(clientId).onDisconnect().remove();
+
+  // update participant count UI
+  participantsRef.on('value', snap => {
+    const val = snap.val() || {};
+    const count = Object.keys(val).length;
+    participantCountEl.textContent = count;
+  });
+
+  // Listen to chat messages
+  chatRef.on('child_added', snap => {
+    const msg = snap.val();
+    appendChatMessage(msg.from, msg.text, msg.ts);
+  });
+
+  function appendChatMessage(from, text, ts) {
+    const d = new Date(ts || Date.now());
+    const el = document.createElement('div');
+    el.innerHTML = `<b>${from}</b>: ${escapeHtml(text)} <span class="small" style="color:var(--muted)">(${d.toLocaleTimeString()})</span>`;
+    chatMessages.appendChild(el);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>'&#'+c.charCodeAt(0)+';'); }
+
+  sendMsgBtn.onclick = () => {
+    const text = msgInput.value.trim();
+    if (!text) return;
+    chatRef.push({ from: clientId, text, ts: Date.now() });
+    msgInput.value = '';
+  };
+
+  msgInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') sendMsgBtn.click();
+  });
+
+  // Copy link
+  copyLinkBtn.addEventListener('click', async () => {
+    const link = location.origin + location.pathname + '?room=' + encodeURIComponent(roomId);
+    try {
+      await navigator.clipboard.writeText(link);
+      copyLinkBtn.textContent = 'Copied!';
+      setTimeout(()=> copyLinkBtn.textContent = 'Copy Link', 1500);
+    } catch(e) {
+      alert('Copy failed: ' + e);
+    }
+  });
+
+  // mute/unmute
+  toggleAudioBtn.addEventListener('click', () => {
+    if (!localStream) return;
+    const audioTrack = localStream.getAudioTracks()[0];
+    if (!audioTrack) return;
+    audioTrack.enabled = !audioTrack.enabled;
+    toggleAudioBtn.textContent = audioTrack.enabled ? 'Mute' : 'Unmute';
+  });
+
+  // toggle camera
+  toggleVideoBtn.addEventListener('click', () => {
+    if (!localStream) return;
+    const videoTrack = localStream.getVideoTracks()[0];
+    if (!videoTrack) return;
+    videoTrack.enabled = !videoTrack.enabled;
+    toggleVideoBtn.textContent = videoTrack.enabled ? 'Stop Camera' : 'Start Camera';
+  });
+
+  // screen share
+  let screenStream = null;
+  shareScreenBtn.addEventListener('click', async () => {
+    if (screenStream) {
+      // stop screen
+      screenStream.getTracks().forEach(t => t.stop());
+      // restore camera
+      if (localStream) {
+        const track = localStream.getVideoTracks()[0];
+        replaceVideoTrack(track);
+      }
+      screenStream = null;
+      shareScreenBtn.textContent = 'Share Screen';
+      return;
+    }
+    try {
+      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const screenTrack = screenStream.getVideoTracks()[0];
+      replaceVideoTrack(screenTrack);
+      // when user stops sharing from browser UI
+      screenTrack.onended = () => {
+        if (localStream) {
+          const track = localStream.getVideoTracks()[0];
+          replaceVideoTrack(track);
+        }
+        screenStream = null;
+        shareScreenBtn.textContent = 'Share Screen';
+      };
+      shareScreenBtn.textContent = 'Stop Sharing';
+    } catch (e) {
+      alert('Screen share failed: ' + e.message);
+    }
+  });
+
+  // Replace the sender's video track if exists
+  function replaceVideoTrack(newTrack) {
+    if (!pc) return;
+    const senders = pc.getSenders ? pc.getSenders() : [];
+    const sender = senders.find(s => s.track && s.track.kind === 'video');
+    if (sender) {
+      sender.replaceTrack(newTrack);
+    } else {
+      pc.addTrack(newTrack, new MediaStream([newTrack]));
+    }
+  }
+
+  // Leave button
+  leaveBtn.addEventListener('click', () => {
+    cleanupAndLeave();
+  });
+
+  // Clean up and remove room if necessary
+  async function cleanupAndLeave() {
+    try {
+      // remove our presence
+      participantsRef.child(clientId).remove();
+
+      // If we created the offer (caller) and are leaving, remove the whole room if no participants remain
+      const snap = await participantsRef.once('value');
+      if (!snap.exists()) {
+        await roomRef.remove();
+      }
+
+      // close peer
+      if (pc) pc.close();
+      if (localStream) localStream.getTracks().forEach(t => t.stop());
+      if (screenStream) screenStream.getTracks().forEach(t => t.stop());
+
+      setStatus('Left room');
+      // redirect to index after a short delay
+      setTimeout(() => location.href = 'index.html', 800);
+    } catch (e) {
+      log('cleanup error', e);
+    }
+  }
+
+  // When page unload, remove our presence
+  window.addEventListener('beforeunload', () => {
+    participantsRef.child(clientId).remove();
+  });
+
+  // ====== Signaling flow with Realtime DB (caller/callee candidate arrays) ======
+  async function initCall() {
+    await startLocalStream();
+    createPeerConnection();
+
+    // determine if room exists already (someone created offer)
+    const snap = await roomRef.once('value');
+    const roomData = snap.val();
+    if (!roomData || !roomData.offer) {
+      // we are caller (first person) -> create offer
+      isCaller = true;
+      setStatus('Creating offer (you are caller)');
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await roomRef.child('offer').set(pc.localDescription.toJSON());
+      // listen for answer set by callee
+      roomRef.child('answer').on('value', async s => {
+        const ans = s.val();
+        if (ans && !pc.remoteDescription) {
+          await pc.setRemoteDescription(ans);
+          setStatus('Remote answer set');
+        }
+      });
+
+      // listen for callee ICE candidates
+      calleeCandidatesRef.on('child_added', snap => {
+        const c = snap.val();
+        log('Remote ICE candidate (callee)', c);
+        pc.addIceCandidate(new RTCIceCandidate(c));
+      });
+
+    } else {
+      // we are callee (joiner)
+      isCaller = false;
+      setStatus('Joining room (you are callee)');
+      const offer = roomData.offer;
+      await pc.setRemoteDescription(offer);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await roomRef.child('answer').set(pc.localDescription.toJSON());
+
+      // listen for caller ICE candidates
+      callerCandidatesRef.on('child_added', snap => {
+        const c = snap.val();
+        log('Remote ICE candidate (caller)', c);
+        pc.addIceCandidate(new RTCIceCandidate(c));
+      });
+
+      // also listen for later-callee candidates (if any) - not strictly necessary
+    }
+
+    // Listen for newly pushed caller candidates (if we are caller it will be our own pushed; if callee we still need to receive them)
+    callerCandidatesRef.on('child_added', snap => {
+      const c = snap.val();
+      if (!isCaller) {
+        log('Adding caller candidate (callee side)', c);
+        pc.addIceCandidate(new RTCIceCandidate(c));
+      }
+    });
+
+    // Listen for newly pushed callee candidates (if we are caller we need to receive them)
+    calleeCandidatesRef.on('child_added', snap => {
+      const c = snap.val();
+      if (isCaller) {
+        log('Adding callee candidate (caller side)', c);
+        pc.addIceCandidate(new RTCIceCandidate(c));
+      }
+    });
+
+    setStatus('Waiting for connection...');
+  }
+
+  // Start the whole sequence
+  initCall().catch(err => {
+    setStatus('Error: ' + err.message);
+    log('initCall error', err);
+  });
+
+  // ui status initial
+  setStatus('Initializing room: ' + roomId);
+
+  </script>
+</body>
+</html>
